@@ -3,135 +3,72 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/wait.h>
+#include <sys/socket.h>
 #include <sys/resource.h>
-#include <pthread.h>
-#include <signal.h>
-#include <errno.h>
-#include <arpa/inet.h>
 #include <netinet/in.h>
-#include <netdb.h>
+#include <pthread.h>
 #include <fcntl.h>
-#include <sys/stat.h>
+#include <sys/file.h>
 #include <time.h>
 
-#define PORT 8080 // Порт сервера
-#define MAX_CLIENTS 5 // Максимальное число клиентов
-#define BUFFER_SIZE 1024 // Размер буфера сообщений
+#define PORT 8080
+#define MAX_CLIENTS 5
+#define BUFFER_SIZE 1024
 
-// Функция-обработчик сигнала SIGCHLD для очистки зомби-процессов
-void sigchld_handler(int s) {
-    while(waitpid(-1, NULL, WNOHANG) > 0);
+// Проверка на повторный запуск
+void check_singleton() {
+    int lock_fd = open("/tmp/server1.lock", O_CREAT | O_RDWR, 0666);
+    if (flock(lock_fd, LOCK_EX | LOCK_NB) == -1) {
+        fprintf(stderr, "Сервер уже запущен!\n");
+        exit(EXIT_FAILURE);
+    }
 }
 
-// Структура потока-клиента
-typedef struct client_thread_data {
-    int socket_fd;
-    char *client_ip;
-} client_thread_data_t;
-
-// Потоковая функция для обслуживания клиентов
 void* handle_client(void* arg) {
-    client_thread_data_t *data = (client_thread_data_t*)arg;
-    int sockfd = data->socket_fd;
-    free(data->client_ip);
-    free(data);
-    
+    int sockfd = *((int*)arg);
+    free(arg);
+
     char buffer[BUFFER_SIZE];
-    memset(buffer, 0, sizeof(buffer));
+    pid_t pid = getpid();
+    int priority = getpriority(PRIO_PROCESS, 0);
 
-    ssize_t bytes_read = recv(sockfd, buffer, sizeof(buffer)-1, 0);
-    if(bytes_read <= 0){
-        close(sockfd);
-        return NULL;
-    }
-
-    // Форматируем строку с информацией о сервере
-    pid_t server_pid = getpid();
-    int priority = getpriority(PRIO_PROCESS, server_pid);
-    time_t current_time = time(NULL);
-    time_t t_time = time(NULL);
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
     char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&t_time));
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm);
 
-    snprintf(buffer, sizeof(buffer),
-            "Server PID: %d\nPriority: %d\nTime: %s",
-            server_pid, priority, timestamp);
-
+    snprintf(buffer, BUFFER_SIZE, 
+        "Server PID: %d\nPriority: %d\nTime: %s", 
+        pid, priority, timestamp
+    );
+    
     send(sockfd, buffer, strlen(buffer)+1, 0);
     close(sockfd);
-    pthread_exit(NULL);
+    return NULL;
 }
 
-// Основной цикл сервера
 int main() {
-    // Установка обработчика сигнала SIGCHLD
-    signal(SIGCHLD, sigchld_handler);
+    check_singleton(); // Блокировка повторного запуска
+    
+    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(PORT),
+        .sin_addr.s_addr = INADDR_ANY
+    };
 
-    // Создаем TCP/IP сокет
-    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    if(listenfd == -1){
-        perror("Ошибка при создании сокета");
-        exit(EXIT_FAILURE);
-    }
+    bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr));
+    listen(listen_fd, MAX_CLIENTS);
 
-    // Определяем адрес прослушивания
-    struct sockaddr_in serv_addr;
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
-    serv_addr.sin_addr.s_addr = INADDR_ANY;
-
-    // Привязываем сокет к адресу
-    if(bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) != 0){
-        perror("Ошибка привязки адреса");
-        close(listenfd);
-        exit(EXIT_FAILURE);
-    }
-
-    // Начинаем прослушивание входящих соединений
-    if(listen(listenfd, MAX_CLIENTS) != 0){
-        perror("Ошибка при попытке начать прослушивание");
-        close(listenfd);
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Сервер запущен и ожидает соединения...\n");
-
-    fd_set master_set, readfds;
-    FD_ZERO(&master_set);
-    FD_SET(listenfd, &master_set);
-    int maxfd = listenfd + 1;
-
-    while(1){
-        readfds = master_set;
-        select(maxfd, &readfds, NULL, NULL, NULL);
+    printf("Сервер 1 запущен на порту %d\n", PORT);
+    
+    while (1) {
+        int client_fd = accept(listen_fd, NULL, NULL);
+        int *arg = malloc(sizeof(int));
+        *arg = client_fd;
         
-        for(int i = 0; i < maxfd; ++i){
-            if(FD_ISSET(i, &readfds)){
-                if(i == listenfd){ // Новый клиент пытается подключиться
-                    struct sockaddr_in cliaddr;
-                    socklen_t addrlen = sizeof(cliaddr);
-                    int connfd = accept(listenfd, (struct sockaddr*)&cliaddr, &addrlen);
-                    
-                    if(connfd >= 0){
-                        // Создаем новый поток для обслуживания нового клиента
-                        client_thread_data_t *thread_data = malloc(sizeof(client_thread_data_t));
-                        thread_data->socket_fd = connfd;
-                        
-                        char ip_buf[INET_ADDRSTRLEN];
-                        inet_ntop(AF_INET, &(cliaddr.sin_addr), ip_buf, sizeof(ip_buf));
-                        thread_data->client_ip = strdup(ip_buf);
-
-                        pthread_t tid;
-                        pthread_create(&tid, NULL, handle_client, thread_data);
-                        pthread_detach(tid);
-                    }
-                }
-            }
-        }
+        pthread_t thread;
+        pthread_create(&thread, NULL, handle_client, arg);
+        pthread_detach(thread);
     }
-
-    close(listenfd);
-    return EXIT_SUCCESS;
 }

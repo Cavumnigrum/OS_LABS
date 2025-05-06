@@ -1,136 +1,107 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
+#include <gtk/gtk.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <netdb.h>
-#include <pthread.h>
-#include <time.h>
-#include <gtk/gtk.h>
+#include <arpa/inet.h>
 
 #define SERVER1_PORT 8080
 #define SERVER2_PORT 8081
-#define BUFFER_SIZE 1024
 
-GtkWidget *window;
-GtkTextView *text_view;
+GtkWidget *text_view;
+GtkWidget *entry_ip;
 
-static void on_destroy(GtkWidget *widget, gpointer data) {
-    gtk_main_quit();
+// Функция для безопасного вывода текста в основном потоке
+gboolean append_text_safe(gpointer data) {
+    char *text = (char*)data;
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(text_view));
+    gtk_text_buffer_insert_at_cursor(buffer, text, -1);
+    free(text); // Освобождаем память
+    return G_SOURCE_REMOVE;
 }
 
-// Вспомогательная функция для вывода текста в текстовом виджете
-void append_text(const char *msg) {
-    GtkTextBuffer *buffer = gtk_text_view_get_buffer(text_view);
-    gtk_text_buffer_insert_at_cursor(buffer, msg, -1);
+// Функция для отправки данных в GUI
+void append_text(const char *text) {
+    char *copy = strdup(text); // Копируем текст для передачи в основной поток
+    g_idle_add(append_text_safe, copy); // Используем g_idle_add
 }
 
-// Параметры сервера
-struct server_params {
-    char *hostname;
-    unsigned short port;
-};
+void* connect_to_server(void *port_ptr) {
+    int port = *((int*)port_ptr);
+    const char *ip = gtk_entry_get_text(GTK_ENTRY(entry_ip));
+    if (strlen(ip) == 0) {
+	ip = "127.0.0.1";
+    }
 
-// Флаг для прекращения циклического опроса
-volatile sig_atomic_t stop_flag = 0;
+    if (inet_addr(ip) == INADDR_NONE) {
+        append_text("Неверный IP-адрес!\n");
+        return NULL;
+    }
 
-// Сигнал для выхода из цикла
-void sigint_handler(int signum) {
-    stop_flag = 1;
-}
-
-// Функция-поток для общения с одним сервером
-void* connect_to_server(void* param) {
-    struct server_params *params = (struct server_params *)param;
-    char hostname[100];
-    strcpy(hostname, params->hostname);
-    unsigned short port = params->port;
-
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;           // Исправлено
+    addr.sin_port = htons(port);         // Исправлено
+    addr.sin_addr.s_addr = inet_addr(ip);// Исправл0ено
+    
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        fprintf(stderr, "Ошибка открытия сокета.\n");
-        pthread_exit(NULL);
+        append_text("Ошибка создания сокета!\n");
+        return NULL;
     }
-
-    struct hostent *server = gethostbyname(hostname);
-    if (!server) {
-        fprintf(stderr, "Ошибка разрешения имени хоста.\n");
+    printf("Connection to %s:%d...\n", ip, port);
+    // Исправленный вызов connect
+    if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+	printf("Failed to connect to %s:%d...\n", ip, port);
+	perror("Connection error");
+	append_text("Ошибка подключения!\n");
         close(sockfd);
-        pthread_exit(NULL);
+        return NULL;
     }
-
-    struct sockaddr_in serv_addr;
-    bzero((char *)&serv_addr, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    memcpy((char *)&serv_addr.sin_addr.s_addr, (char *)server->h_addr_list[0], server->h_length);
-    serv_addr.sin_port = htons(port);
-
-    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        fprintf(stderr, "Ошибка подключения к серверу.\n");
-        close(sockfd);
-        pthread_exit(NULL);
+    printf("Connected to to %s:%d...\n", ip, port);
+    char buffer[1024];
+    ssize_t bytes = recv(sockfd, buffer, sizeof(buffer)-1, 0);
+    if (bytes > 0) {
+        buffer[bytes] = '\0';
+        append_text(buffer);
+        append_text("\n---\n");
     }
-
-    char buffer[BUFFER_SIZE];
-    bzero(buffer, BUFFER_SIZE);
-    size_t num_bytes = recv(sockfd, buffer, BUFFER_SIZE-1, 0);
-    if(num_bytes > 0) {
-        printf("\nДанные от сервера (%u):\n%s\n", port, buffer);
-    } else {
-        fprintf(stderr, "Ошибка приема данных от сервера.\n");
-    }
-
+    append_text("Succes!");
     close(sockfd);
-    pthread_exit(NULL);
+    return NULL;
 }
 
-// Основная программа
-int main(int argc, char *argv[]) {
-    if(argc != 2) {
-        fprintf(stderr,"Использование: %s <IP-хост>\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
 
-    char *hostname = argv[1]; // IP-адрес или доменное имя сервера
+void on_connect(GtkWidget *widget, gpointer data) {
+    int port = GPOINTER_TO_INT(data);
+    pthread_t thread;
+    pthread_create(&thread, NULL, connect_to_server, &port);
+    pthread_detach(thread);
+}
 
-    // Структуры для хранения параметров серверов
-    struct server_params servers[] = {
-        { .hostname = hostname, .port = SERVER1_PORT },
-        { .hostname = hostname, .port = SERVER2_PORT }
-    };
-
-    // Массив для управления потоками
-    pthread_t threads[sizeof(servers)/sizeof(struct server_params)];
-  
-    // Инициализация графического интерфейса
+int main(int argc, char **argv) {
     gtk_init(&argc, &argv);
+    
+    GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    
+    entry_ip = gtk_entry_new();
+    GtkWidget *btn_server1 = gtk_button_new_with_label("Сервер 1 (PID)");
+    GtkWidget *btn_server2 = gtk_button_new_with_label("Сервер 2 (ОС)");
+    text_view = gtk_text_view_new(); // Возвращает GtkWidget*
+    
+    static int server1_port = SERVER1_PORT; // 8080
+    static int server2_port = SERVER2_PORT; // 8081
 
-    window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    text_view = GTK_TEXT_VIEW(gtk_text_view_new());
-    gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(text_view));
+    g_signal_connect(btn_server1, "clicked", G_CALLBACK(on_connect), &server1_port);
+    g_signal_connect(btn_server2, "clicked", G_CALLBACK(on_connect), &server2_port);
+    
+    gtk_container_add(GTK_CONTAINER(window), box);
+    gtk_box_pack_start(GTK_BOX(box), entry_ip, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), btn_server1, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), btn_server2, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), text_view, TRUE, TRUE, 0);
+    
     gtk_widget_show_all(window);
-
-    g_signal_connect(window, "destroy", G_CALLBACK(on_destroy), NULL);
-    // Регистрация обработчика сигнала Ctrl+C
-    signal(SIGINT, sigint_handler);
-
-    // Цикл опроса
-    while(!stop_flag) {
-        sleep(5); // Пауза между опросами (можно настроить)
-
-        // Повторяем тот же цикл для каждого сервера
-        for(size_t i = 0; i < sizeof(threads)/sizeof(pthread_t); i++) {
-            pthread_create(&(threads[i]), NULL, connect_to_server, (void*)&servers[i]);
-        }
-
-        // Ждём завершения всех потоков
-        for(size_t i = 0; i < sizeof(threads)/sizeof(pthread_t); i++) {
-            pthread_join(threads[i], NULL);
-        }
-    }
-  
     gtk_main();
-    return EXIT_SUCCESS;
+    return 0;
 }

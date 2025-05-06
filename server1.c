@@ -50,8 +50,9 @@ void* handle_client(void* arg) {
     pid_t server_pid = getpid();
     int priority = getpriority(PRIO_PROCESS, server_pid);
     time_t current_time = time(NULL);
+    time_t t_time = time(NULL);
     char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(¤t_time));
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&t_time));
 
     snprintf(buffer, sizeof(buffer),
             "Server PID: %d\nPriority: %d\nTime: %s",

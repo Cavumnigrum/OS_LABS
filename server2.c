@@ -68,7 +68,8 @@ void* handle_client(void* arg) {
     // Формируем ответ клиенту
     time_t current_time = time(NULL);
     char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(¤t_time));
+    time_t t_time = time(NULL);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&t_time));
 
     snprintf(buffer, sizeof(buffer),
             "Keyboard Layout: %s\nOS Version: %s\nTime: %s",

@@ -24,6 +24,48 @@ void append_text(const char *text) {
     char *copy = strdup(text); // Копируем текст для передачи в основной поток
     g_idle_add(append_text_safe, copy); // Используем g_idle_add
 }
+// Получение текущей раскладки через setxkbmap
+char* get_current_layout() {
+    char buffer[128];
+    FILE *fp = popen("setxkbmap -query | grep layout", "r");
+    if (!fp) return NULL;
+    
+    if (!fgets(buffer, sizeof(buffer), fp)) {
+        pclose(fp);
+        return NULL;
+    }
+    pclose(fp);
+    
+    char *layout = strchr(buffer, ':');
+    if (!layout) return NULL;
+    
+    layout++; // Пропускаем двоеточие
+    while (*layout == ' ') layout++; // Удаляем пробелы
+    
+    char *end = strchr(layout, '\n');
+    if (end) *end = '\0';
+    
+    return strdup(layout);
+}
+
+// Обработчик кнопки смены раскладки
+void on_switch_layout(GtkWidget *widget, gpointer data) {
+    char *current = get_current_layout();
+    if (!current) {
+        append_text("Ошибка определения раскладки\n");
+        return;
+    }
+    
+    if (strcmp(current, "us") == 0) {
+        system("setxkbmap ru");
+        append_text("Раскладка изменена на: RU\n");
+    } else {
+        system("setxkbmap us");
+        append_text("Раскладка изменена на: US\n");
+    }
+    
+    free(current);
+}
 
 void* connect_to_server(void *port_ptr) {
     int port = *((int*)port_ptr);
@@ -87,6 +129,9 @@ int main(int argc, char **argv) {
     entry_ip = gtk_entry_new();
     GtkWidget *btn_server1 = gtk_button_new_with_label("Сервер 1 (PID)");
     GtkWidget *btn_server2 = gtk_button_new_with_label("Сервер 2 (ОС)");
+
+    GtkWidget *btn_switch = gtk_button_new_with_label("Смена раскладки");
+
     text_view = gtk_text_view_new(); // Возвращает GtkWidget*
     
     static int server1_port = SERVER1_PORT; // 8080
@@ -94,11 +139,13 @@ int main(int argc, char **argv) {
 
     g_signal_connect(btn_server1, "clicked", G_CALLBACK(on_connect), &server1_port);
     g_signal_connect(btn_server2, "clicked", G_CALLBACK(on_connect), &server2_port);
-    
+    g_signal_connect(btn_switch, "clicked", G_CALLBACK(on_switch_layout), NULL);
+
     gtk_container_add(GTK_CONTAINER(window), box);
     gtk_box_pack_start(GTK_BOX(box), entry_ip, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), btn_server1, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), btn_server2, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), btn_switch, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), text_view, TRUE, TRUE, 0);
     
     gtk_widget_show_all(window);

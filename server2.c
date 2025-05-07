@@ -23,28 +23,31 @@ void check_singleton() {
     }
 }
 
+char* get_keyboard_layout(){
+	char buffer[32];
+	FILE *pipe = popen("xkblayout-state print \"%s\" 2>/dev/null","r");
+	if (!pipe) return NULL;
+	
+	fgets(buffer, sizeof(buffer), pipe);
+	pclose(pipe);
+
+	size_t len = strlen(buffer);
+	if (len > 0 && buffer[len-1] == '\n') buffer[len-1] = '\0';
+	
+	return strdup(buffer);
+}
 void* handle_client(void* arg) {
     int sockfd = *((int*)arg);
     free(arg);
 
     char buffer[BUFFER_SIZE];
+    char *layout = get_keyboard_layout();
     
-    // Получение раскладки клавиатуры
-    Display *d = XOpenDisplay(NULL);
-    int layout = 0;
-    if (d) {
-        XkbStateRec state;
-        XkbGetState(d, XkbUseCoreKbd, &state);
-        layout = state.group + 1;
-        XCloseDisplay(d);
-    }
-    
-    // Версия ОС через uname()
     struct utsname os_info;
     uname(&os_info);
 
     snprintf(buffer, BUFFER_SIZE,
-        "Keyboard Layout: %d\nOS Version: %s %s\n",
+        "Keyboard Layout: %s\nOS Version: %s %s\n",
         layout, os_info.sysname, os_info.release
     );
     
@@ -66,7 +69,7 @@ int main() {
     bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr));
     listen(listen_fd, MAX_CLIENTS);
 
-    printf("Сервер 2 запущен на порту %d\n", PORT);
+    printf("Сервер запущен на порту %d\n", PORT);
 
     while (1) {
         int client_fd = accept(listen_fd, NULL, NULL);

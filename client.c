@@ -63,18 +63,18 @@ void* connect_to_server(void *port_ptr) {
     if (bytes > 0) {
         buffer[bytes] = '\0';
         append_text(buffer);
-        append_text("\n---\n");
     }
-    append_text("Succes!");
+    append_text("\n---\n");
     close(sockfd);
     return NULL;
 }
 
 
 void on_connect(GtkWidget *widget, gpointer data) {
-    int port = GPOINTER_TO_INT(data);
+    int port = *((int*)data);
     pthread_t thread;
-    pthread_create(&thread, NULL, connect_to_server, &port);
+    printf("port: %d\n",port);
+    pthread_create(&thread, NULL, connect_to_server, data);
     pthread_detach(thread);
 }
 

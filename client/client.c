@@ -3,6 +3,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
+#include <string.h>
+#include <stdio.h>
 
 #define SERVER1_PORT 8080
 #define SERVER2_PORT 8081
@@ -69,37 +72,38 @@ void on_switch_layout(GtkWidget *widget, gpointer data) {
 
 void* connect_to_server(void *port_ptr) {
     int port = *((int*)port_ptr);
-    const char *ip = gtk_entry_get_text(GTK_ENTRY(entry_ip));
-    if (strlen(ip) == 0) {
-	ip = "127.0.0.1";
+    const char *host = gtk_entry_get_text(GTK_ENTRY(entry_ip));
+    if (strlen(host) == 0) {
+        host = (port == SERVER1_PORT) ? "server1" : "server2";
     }
 
-    if (inet_addr(ip) == INADDR_NONE) {
-        append_text("Неверный IP-адрес!\n");
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; //IPv4 \ IPv6
+    hints.ai_socktype = SOCK_STREAM;
+
+    char port_str[6];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+        append_text("Ошибка разрешения имени хоста!\n");
         return NULL;
     }
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;           // Исправлено
-    addr.sin_port = htons(port);         // Исправлено
-    addr.sin_addr.s_addr = inet_addr(ip);// Исправл0ено
-    
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    int sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sockfd < 0) {
         append_text("Ошибка создания сокета!\n");
+        freeaddrinfo(res);
         return NULL;
     }
-    printf("Connection to %s:%d...\n", ip, port);
-    // Исправленный вызов connect
-    if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
-	printf("Failed to connect to %s:%d...\n", ip, port);
-	perror("Connection error");
-	append_text("Ошибка подключения!\n");
+
+    if (connect(sockfd, res->ai_addr, res->ai_addrlen) == -1) {
+        append_text("Ошибка подключения!\n");
         close(sockfd);
+        freeaddrinfo(res);
         return NULL;
     }
-    printf("Connected to to %s:%d...\n", ip, port);
+
     char buffer[1024];
     ssize_t bytes = recv(sockfd, buffer, sizeof(buffer)-1, 0);
     if (bytes > 0) {
@@ -108,9 +112,9 @@ void* connect_to_server(void *port_ptr) {
     }
     append_text("\n---\n");
     close(sockfd);
+    freeaddrinfo(res);
     return NULL;
 }
-
 
 void on_connect(GtkWidget *widget, gpointer data) {
     int port = *((int*)data);

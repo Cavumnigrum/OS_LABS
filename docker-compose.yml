@@ -8,6 +8,10 @@ services:
 
   server2:
     build: ./server2
+    environment:
+      - DISPLAY=:0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
     networks:
       - app_network
 

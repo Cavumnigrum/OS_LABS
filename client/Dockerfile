@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-dev \
     libc6-dev \
     x11-apps\
+    x11-xkb-utils \
+    libcanberra-gtk3-module \
     && rm -rf /var/lib/apt/lists/*
 
 COPY client.c .

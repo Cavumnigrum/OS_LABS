@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 
 # Путь к папке с картами памяти
-maps_dir = "/home/stasyuk/labs/lab5/maps"
+maps_dir = "/home/vinogradov/OS_vinogradov/labs/OS_LABS/lab5/maps"
 
 # Список для хранения (время, размер кучи)
 heap_sizes = []
